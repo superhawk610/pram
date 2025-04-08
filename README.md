@@ -15,22 +15,30 @@ Note that by default, the URL has no query string, and the displayed params are 
 the user provides input, the parameters all contain their default values, so there's no need to encode
 anything in the URL.
 
-![empty params](./readme/empty.png)
+<img src="./readme/empty.png" alt="empty params" width="600" />
 
 Once the user has provided input, only the field(s) that have changed are recorded in the URL.
 
-![with one param changed](./readme/one.png)
+<img src="./readme/one.png" alt="with one param changed" width="600" />
 
 Changing additional fields will include them in the URL, so long as their value is different from the
 default.
 
-![with additional changes](./readme/two.png)
+<img src="./readme/two.png" alt="with additional changes" width="600" />
 
 ## Implementation
 
 ```elixir
 defmodule PramWeb.PramLive.Index do
   # ..(snip)..
+
+  defmodule Params do
+    use Ecto.Schema
+
+    embedded_schema do
+      # ..(snip)..
+    end
+  end
 
   # 1. Define the default parameters. Only values that differ
   # from the default are included in the URL.
