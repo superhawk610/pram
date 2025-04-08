@@ -9,7 +9,7 @@ defmodule Pram.Application do
   def start(_type, _args) do
     children = [
       PramWeb.Telemetry,
-      Pram.Repo,
+      # Pram.Repo,
       {DNSCluster, query: Application.get_env(:pram, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Pram.PubSub},
       # Start the Finch HTTP client for sending emails
