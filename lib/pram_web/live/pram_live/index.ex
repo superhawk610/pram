@@ -2,33 +2,45 @@ defmodule PramWeb.PramLive.Index do
   use PramWeb, :live_view
 
   alias Ecto.Changeset
-  import PramWeb.Helpers, only: [changeset_errors: 1]
+  alias PramWeb.Helpers
 
+  # Parameter handling in Phoenix LiveView follows a specific pattern:
+  # 1. Define schemas to validate and structure parameters
+  # 2. Only include non-default values in URLs (keep URLs clean)
+  # 3. Handle parameter changes consistently through handle_params
+  # 4. Provide clear feedback when parameters are invalid
+
+  # The Favorites schema demonstrates parameter handling for nested structures
   defmodule Favorites do
     use Ecto.Schema
-
     import Ecto.Changeset
 
+    # Using embedded_schema to define the structure and types for parameter casting and validation
     embedded_schema do
+      # Default values reduce URL clutter - only non-default values appear in URL
       field :flavor, :string, default: "vanilla"
       field :topping, :string, default: "sprinkles"
+      field :servings, :integer, default: 1
     end
 
     def changeset(model, params) do
       model
-      |> cast(params, [:flavor, :topping])
+      |> cast(params, [:flavor, :topping, :servings])
     end
   end
 
+  # Main parameter schema showing how to handle complex parameter structures
   defmodule Params do
     use Ecto.Schema
-
     import Ecto.Changeset
 
     embedded_schema do
+      # Basic parameter fields
       field :name, :string
       field :email, :string
 
+      # Nested parameter structures using embeds_one
+      # on_replace: :update ensures proper handling of nested parameter updates
       embeds_one :date_filter, DateFilter, on_replace: :update do
         field :start_date, :date, default: ~D[2025-01-01]
         field :end_date, :date
@@ -71,100 +83,118 @@ defmodule PramWeb.PramLive.Index do
             label="Topping"
             options={["sprinkles", "strawberries", "cherries"]}
           />
+          <.input
+            type="text"
+            field={f[:servings]}
+            label="Servings (try entering text to see invalid parameter handling)"
+          />
         </.inputs_for>
       </.form>
 
       <label>Last changed</label>
-      <% params = inspect(to_params_changed_only(@changed), pretty: true) %>
+      <% params = inspect(Helpers.to_params_changed_only(@changed), pretty: true) %>
       <pre class="mt-4 bg-gray-100 p-4 rounded-md overflow-x-auto"><%= params %></pre>
 
       <label>State of the world</label>
-      <% state_of_the_world = inspect(to_params(@params), pretty: true) %>
+      <% state_of_the_world = inspect(Helpers.to_params(@params), pretty: true) %>
       <pre class="mt-4 bg-gray-100 p-4 rounded-md overflow-x-auto"><%= state_of_the_world %></pre>
     </div>
     """
   end
 
-  # 1. Define the default parameters. Only values that differ
-  # from the default are included in the URL.
+  # Initial parameter handling on page load
+  @impl true
+  def mount(params, _session, socket) do
+    socket = assign(socket, :params, default_params())
+
+    default_params()
+    |> Params.changeset(params)
+    |> Helpers.handle_changeset_result()
+    |> case do
+      {:ok, params} ->
+        changeset = Params.changeset(default_params(), params)
+
+        socket =
+          socket
+          |> assign(:params, Changeset.apply_changes(changeset))
+          |> assign(:changed, changeset)
+
+        {:ok, socket}
+
+      {:error, changeset} ->
+        socket =
+          socket
+          |> assign(:changed, changeset)
+          |> handle_invalid_params(changeset)
+
+        {:ok, socket}
+    end
+  end
+
+  # Handle parameter changes (e.g., from URL changes or browser navigation)
+  @impl true
+  def handle_params(params, _uri, socket) do
+    # Compare new parameters against current state
+    changes = Params.changeset(socket.assigns.params, params)
+
+    case changes do
+      # For valid parameters, update the state and track changes
+      %Ecto.Changeset{valid?: true} = changeset ->
+        new_params = Changeset.apply_changes(changeset)
+
+        socket =
+          socket
+          # Track what changed for UI feedback
+          |> assign(:changed, changeset)
+          # Update the complete state
+          |> assign(:params, new_params)
+
+        {:noreply, socket}
+
+      # For invalid parameters, remove them and notify user
+      invalid_changeset ->
+        socket = handle_invalid_params(socket, invalid_changeset)
+        {:noreply, socket}
+    end
+  end
+
+  # Handle form changes from user interaction
+  @impl true
+  def handle_event("update_params", %{"params" => params}, socket) do
+    default_params()
+    |> Params.changeset(params)
+    |> Helpers.handle_changeset_result()
+    |> case do
+      {:ok, params} ->
+        {:noreply, push_patch(socket, to: build_path(params), replace: true)}
+
+      {:error, changeset} ->
+        {:noreply, put_flash(socket, :error, Helpers.format_invalid_param_message(changeset))}
+    end
+  end
+
+  # Helper to handle invalid parameters
+  defp handle_invalid_params(socket, changeset) do
+    valid_params =
+      changeset
+      |> Helpers.to_params_changed_only()
+
+    socket
+    |> put_flash(:error, Helpers.format_invalid_param_message(changeset))
+    |> push_patch(to: build_path(valid_params), replace: true)
+  end
+
+  # Helper to build consistent URLs
+  defp build_path(params) do
+    qs = if(params == %{}, do: "", else: "?#{Plug.Conn.Query.encode(params)}")
+    "/pram#{qs}"
+  end
+
+  # Define default parameter values
   defp default_params do
     %Params{
       date_filter: %Params.DateFilter{},
       favorites: %Favorites{}
     }
   end
-
-  # 2. Set the default parameters in the mount.
-  @impl true
-  def mount(params, _session, socket) do
-    changes = Params.changeset(default_params(), params)
-    # validate the params
-    # ... pop flash messages if there are errors
-
-    # convert to the state of the world
-    parsed_params = Changeset.apply_changes(changes)
-
-    # Load page data based on the state of the wolrd
-    # .. load data ...
-    socket = assign(socket, :params, parsed_params)
-    {:ok, socket}
-  end
-
-  # 3. The URL parameters only include values that differ from the defaults.
-  # To get the full parameters, we need to merge the URL parameters with the
-  # default parameters.
-  @impl true
-  def handle_params(params, _uri, socket) do
-    # compare these params to the params you had last time
-    changes = Params.changeset(socket.assigns.params, params)
-
-    # Validate the changes, pop up a flash message if there are errors
-
-    # this is where you can load things based on changed params  .
-    # ... selectively load data based on the changed params
-
-    # Apply the changes so that the new params become the state of the world
-    new_params = Changeset.apply_changes(changes)
-
-    socket = assign(socket, :changed, changes)
-    {:noreply, assign(socket, :params, new_params)}
-  end
-
-  # 4. When the parameters change, we need to update the URL.
-  # We do this by calling `push_patch/3` with *only* the changed parameters.
-  @impl true
-  def handle_event("update_params", %{"params" => params}, socket) do
-    default_params()
-    |> Params.changeset(params)
-    |> case do
-      %Ecto.Changeset{valid?: true} = changeset ->
-        params = to_params_changed_only(changeset)
-        qs = if(params == %{}, do: "", else: "?#{Plug.Conn.Query.encode(params)}")
-        {:noreply, push_patch(socket, to: "/pram#{qs}", replace: true)}
-
-      changeset ->
-        {:noreply, put_flash(socket, :error, changeset_errors(changeset))}
-    end
-  end
-
-  # Note that `changeset.changes` is used to only include changed values.
-  defp to_params_changed_only(%Ecto.Changeset{changes: changes}) do
-    Map.new(changes, fn
-      {key, changeset = %Ecto.Changeset{}} -> {key, to_params_changed_only(changeset)}
-      {key, value} -> {key, value}
-    end)
-  end
-
-  defp to_params(%Date{} = date) do
-    date
-    |> Date.to_iso8601()
-  end
-
-  defp to_params(%_{} = params) do
-    params
-    |> Map.from_struct()
-    |> Map.new(fn {key, value} -> {key, to_params(value)} end)
-  end
-
-  defp to_params(v), do: v
 end
